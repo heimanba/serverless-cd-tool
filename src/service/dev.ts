@@ -24,8 +24,8 @@ function replaceFun(str, obj) {
   return str;
 }
 
-const checkEnv = async (configPath) => {
-  const currentPath = await getSrcPath(configPath);
+const checkEnv = async (inputs) => {
+  const currentPath = await getSrcPath(inputs);
   // .env文件不存在，报错提示，不进入下一步操作
   const envFilePath = path.join(currentPath, ".env");
   if (!fse.existsSync(envFilePath)) {
@@ -35,8 +35,8 @@ const checkEnv = async (configPath) => {
   }
 };
 
-const replaceTemplateWithEnv = async (configPath, inputs) => {
-  const srcPath = await getSrcPath(configPath);
+const replaceTemplateWithEnv = async (inputs) => {
+  const srcPath = await getSrcPath(inputs);
   const inputOptions = getInputCommandOptions(inputs);
   logger.debug(`input options: ${JSON.stringify(inputOptions)}`);
 
@@ -100,8 +100,9 @@ const getInputCommandOptions = (inputs: IInput) => {
 };
 
 export default {
-  getSrcPath,
-  checkEnv,
-  replaceTemplateWithEnv,
+  dev: async (inputs) => {
+    await checkEnv(inputs);
+    await replaceTemplateWithEnv(inputs);
+  },
   hasCommandHelp,
 };

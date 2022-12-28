@@ -1,13 +1,12 @@
-import { lodash as _, fse, inquirer } from "@serverless-devs/core";
+import { lodash as _, fse } from "@serverless-devs/core";
 import path from "path";
 import logger from "./common/logger";
-import { IInput, IProps } from "./common/entity";
-import * as constants from "./constants";
-import { getCred } from "./util";
-import Domain from "./resource/domain";
+import { IInput } from "./common/entity";
+import { getSrcPath } from "./util";
 import Ots from "./resource/tablestore";
-import Oss from "./resource/oss";
+import generateService from "./service/generate";
 import devService from "./service/dev";
+import removeService from "./service/remove";
 import updateService from "./service/update";
 
 export default class SevrerlessCdTool {
@@ -18,82 +17,19 @@ export default class SevrerlessCdTool {
    */
   public async generate(inputs: IInput) {
     logger.debug(`input: ${JSON.stringify(inputs.props)}`);
-    const { props = {} as IProps } = inputs;
-
-    const configPath = _.get(inputs, "path.configPath");
-    const cwd = configPath ? path.dirname(configPath) : process.cwd();
-
-    // TODO: 如果 .env 已经存在，优先使用配置文件
-    const envFilePath = path.join(cwd, ".env");
-    if (fse.existsSync(envFilePath)) {
-      const answers: any = await inquirer.prompt([
-        {
-          type: "list",
-          name: "overwrite",
-          message: `${envFilePath} is exised, determine whether to overwrite the file. Exit if not overwritten`,
-          choices: ["yes", "no"],
-        },
-      ]);
-      if (answers.overwrite === "no") {
-        return;
-      }
+    const hasHelp = generateService.hasCommandHelp(inputs);
+    if (hasHelp) {
+      return;
     }
 
-    const dbPrefix = _.get(props, "dbPrefix", "cd");
-
-    const omitProps = _.omit(props, ["dbPrefix", "serviceName"]);
-    const p = _.mapValues(
-      _.defaults(omitProps, constants.OTS_DEFAULT_CONFIG),
-      (value, key) => {
-        if (_.has(constants.OTS_DEFAULT_CONFIG, key)) {
-          return `${dbPrefix}_${value}`;
-        }
-        return value;
-      }
-    );
-    logger.debug(`transform ots values: ${JSON.stringify(p)}`);
-
-    const credentials = await getCred(inputs);
-    const envConfig: IProps = _.merge(constants.OTHER_DEFAULT_CONFIG, p, {
-      ACCOUNTID: credentials.AccountID,
-      ACCESS_KEY_ID: credentials.AccessKeyID,
-      ACCESS_KEY_SECRET: credentials.AccessKeySecret,
-    });
-
-    logger.info("init bucket start");
-    if (_.toLower(envConfig.OSS_BUCKET) === "auto") {
-      const oss = new Oss(envConfig);
-      await oss.putBucket();
-      envConfig.OSS_BUCKET = oss.bucketName;
+    const srcPath = await getSrcPath(inputs);
+    const envFilePath = path.join(srcPath, ".env");
+    const isOverWrite = await generateService.promptOverwriteEnv(envFilePath);
+    if(!isOverWrite) {
+      return;
     }
-    logger.info("init bucket success");
-
-    logger.info("init domain start");
-    if (_.toLower(envConfig.DOMAIN) === "auto") {
-      const domain = new Domain({
-        project: {
-          ...inputs.project,
-        },
-        credentials,
-        appName: "get-domain",
-      });
-      envConfig.DOMAIN = await domain.get({
-        type: "fc",
-        user: envConfig.ACCOUNTID,
-        region: envConfig.REGION,
-        service: _.get(props, "serviceName", "serverless-cd"),
-        function: "auto",
-      });
-    } else if (_.includes(envConfig.DOMAIN, "://")) {
-      envConfig.DOMAIN = envConfig.DOMAIN.split("://")[1]; // 不带协议
-    }
-    logger.info("init domain success");
-
-    logger.info("init ots start");
-    const ots = new Ots(envConfig);
-    await ots.init();
-    logger.info("init ots success");
-
+    const envConfig = await generateService.getDefaultEnvConfig(inputs);
+    await generateService.generate(envConfig, inputs);
     let envStr = "";
     _.forEach(envConfig, (value, key) => (envStr += `${key}=${value || ""}\n`));
     fse.outputFileSync(envFilePath, envStr);
@@ -109,22 +45,36 @@ export default class SevrerlessCdTool {
     if (hasHelp) {
       return;
     }
-
-    const configPath = _.get(inputs, "path.configPath");
-    await devService.checkEnv(configPath);
-    await devService.replaceTemplateWithEnv(configPath, inputs);
+    await devService.dev(inputs);
     logger.info(
       "s.dev.yaml 配置成功，请执行 s deploy -t s.dev.yaml 进行应用部署"
     );
   }
 
+  /**
+   * 更新资源
+   * @param inputs
+   * @returns
+   */
   public async update(inputs: IInput) {
     logger.debug(`input: ${JSON.stringify(inputs.props)}`);
     const hasHelp = updateService.hasCommandHelp(inputs);
     if (hasHelp) {
       return;
     }
-    await updateService.updateService(inputs);
+    await updateService.update(inputs);
+  }
+
+  /**
+   * 删除资源
+   * @param inputs
+   */
+  public async remove(inputs: IInput) {
+    // s remove
+    await removeService.hasCommandHelp(inputs);
+    
+    await removeService.remove(inputs);
+    // logger.info("Remove function resource success...");
   }
 }
 

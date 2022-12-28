@@ -9,6 +9,8 @@ import {
 import path from "path";
 import { ICredentials, IInput } from "./common/entity";
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export const getExampleValue = (cwd: string) => {
   const envExampleFilePath = path.join(cwd, ".env.example");
   const envExampleFileExists = fse.existsSync(envExampleFilePath);
@@ -43,12 +45,22 @@ export const hasHelpOptions = (inputs: IInput): boolean => {
   return parsedArgs?.data?.help;
 };
 
-const getCurrentPath = (configPath: any) => {
-  return process.cwd();
+const _getCurrentPath = (inputs: any) => {
+  const configPath = _.get(inputs, "path.configPath");
+  if (!configPath) {
+    return process.cwd();
+  } else {
+    try {
+      const isDirectory = fse.lstatSync(configPath).isDirectory();
+      return isDirectory ? configPath : path.dirname(configPath);
+    } catch (error) {
+      return process.cwd();
+    }
+  }
 };
 
-export const getSrcPath = async (configPath: any): Promise<string> => {
-  const currentPath = getCurrentPath(configPath);
+export const getSrcPath = async (inputs): Promise<string> => {
+  const currentPath = _getCurrentPath(inputs);
   const isInRootPath = await fse.pathExists(
     path.join(currentPath, "publish.yaml")
   );
@@ -66,3 +78,18 @@ export const getSrcPath = async (configPath: any): Promise<string> => {
   }
   return srcPath;
 };
+
+/**
+ * 异步重试一次
+ * @param promiseFun
+ * @param timer
+ * @returns {Promise<*>}
+ */
+export async function retryOnce(promiseFun, timer = 500) {
+  try {
+    return await promiseFun;
+  } catch (error) {
+    sleep(timer);
+    return await promiseFun;
+  }
+}

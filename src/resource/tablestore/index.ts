@@ -2,13 +2,14 @@
 import { Client } from "tablestore";
 import { lodash as _, popCore } from "@serverless-devs/core";
 import { IProps } from "../../common/entity";
-import * as generateDbParams from "./generate-db-params";
+import { retryOnce } from "../../util";
+import * as dbHelper from "./helper";
 import logger from "../../common/logger";
 import { OTS_INSTANCE_NAME } from "../../constants";
 
 enum OtsAccess {
-  OTS = 'ots',
-  TABLE_STORE = 'tablestore',
+  OTS = "ots",
+  TABLE_STORE = "tablestore",
 }
 
 export default class Ots {
@@ -32,26 +33,26 @@ export default class Ots {
       {
         name: envConfig.OTS_USER_TABLE_NAME,
         indexName: envConfig.OTS_USER_INDEX_NAME,
-        genTableParams: generateDbParams.user,
-        genIndexParams: generateDbParams.userIndex,
+        genTableParams: dbHelper.user,
+        genIndexParams: dbHelper.userIndex,
       },
       {
         name: envConfig.OTS_APP_TABLE_NAME,
         indexName: envConfig.OTS_APP_INDEX_NAME,
-        genTableParams: generateDbParams.application,
-        genIndexParams: generateDbParams.applicationIndex,
+        genTableParams: dbHelper.application,
+        genIndexParams: dbHelper.applicationIndex,
       },
       {
         name: envConfig.OTS_TASK_TABLE_NAME,
         indexName: envConfig.OTS_TASK_INDEX_NAME,
-        genTableParams: generateDbParams.task,
-        genIndexParams: generateDbParams.taskIndex,
+        genTableParams: dbHelper.task,
+        genIndexParams: dbHelper.taskIndex,
       },
       {
         name: envConfig.OTS_TOKEN_TABLE_NAME,
         indexName: envConfig.OTS_TOKEN_INDEX_NAME,
-        genTableParams: generateDbParams.token,
-        genIndexParams: generateDbParams.tokenIndex,
+        genTableParams: dbHelper.token,
+        genIndexParams: dbHelper.tokenIndex,
       },
     ];
   }
@@ -73,8 +74,7 @@ export default class Ots {
   // 初始化实例
   async initInstance() {
     const popClient = this.popClient;
-    const instanceName =
-      this.envConfig?.OTS_INSTANCE_NAME || OTS_INSTANCE_NAME;
+    const instanceName = this.envConfig?.OTS_INSTANCE_NAME || OTS_INSTANCE_NAME;
     let isExistInstance = false;
     logger.info(`Init Ots Instance ${instanceName} Start`);
     try {
@@ -87,14 +87,14 @@ export default class Ots {
         }
       );
       isExistInstance = true;
-    } catch (error) { }
+    } catch (error) {}
 
     if (isExistInstance) {
       logger.debug(`Ots Instance Exist ${instanceName} Exist`);
       logger.info(`Init Ots Instance ${instanceName} Success`);
       return;
     }
-    logger.debug(`Create Instance ${instanceName} Start...`);
+    logger.info(`Create Instance ${instanceName} Start...`);
     await popClient.request(
       "InsertInstance",
       { InstanceName: instanceName, ClusterType: "HYBRID" },
@@ -106,25 +106,58 @@ export default class Ots {
     logger.info(`Init Ots Instance ${instanceName} Success`);
   }
 
+  async removeTable() {
+    const dbConfig = this.dbConfig;
+    for (const { name, indexName, genIndexParams } of dbConfig) {
+      logger.info(`Remove tableIndex ${name}: ${indexName} start...`);
+      try {
+        await retryOnce(
+          this.client.deleteSearchIndex(genIndexParams(name, indexName))
+        );
+      } catch (error) {}
+      logger.info(`Remove tableIndex ${name}: ${indexName} success`);
+      logger.info(`Remove table ${name} start...`);
+      try {
+        await retryOnce(this.client.deleteTable({ tableName: name }));
+      } catch (error) {}
+      logger.info(`Remove table ${name} success`);
+    }
+  }
+
+  async removeInstance() {
+    const instanceName = this.envConfig?.OTS_INSTANCE_NAME || OTS_INSTANCE_NAME;
+    await this.popClient.request(
+      "DeleteInstance",
+      { InstanceName: instanceName },
+      {
+        method: "POST",
+        formatParams: false,
+      }
+    );
+  }
+
   async init() {
     await this.initInstance();
     for (const { name, indexName, genTableParams, genIndexParams } of this
       .dbConfig) {
       logger.debug(`handler ${name} start`);
       try {
-        await this.handlerTable(name, genTableParams(name, this.envConfig));
+        await this.createTable(name, genTableParams(name, this.envConfig));
       } catch (ex) {
         logger.debug(`handler table error: ${ex.message}`);
-        if (ex?.code === 'NetworkingError' && ex?.message.startsWith('getaddrinfo ENOTFOUND')) {
+        if (
+          ex?.code === "NetworkingError" &&
+          ex?.message.startsWith("getaddrinfo ENOTFOUND")
+        ) {
           this.makeClient(OtsAccess.TABLE_STORE);
-          await this.handlerTable(name, genTableParams(name, this.envConfig));
+          await this.createTable(name, genTableParams(name, this.envConfig));
         } else {
           throw ex;
         }
       }
 
       if (indexName) {
-        await this.handlerIndex(
+        await this.createIndex(
           name,
           indexName,
           genIndexParams(name, indexName)
@@ -135,11 +168,14 @@ export default class Ots {
     }
   }
 
-  private async handlerIndex(
-    tableName: string,
-    indexName: string,
-    params: any
-  ) {
+  /**
+   * 创建索引
+   * @param tableName
+   * @param indexName
+   * @param params
+   * @returns
+   */
+  private async createIndex(tableName: string, indexName: string, params: any) {
     logger.debug(`need handler index: ${indexName}`);
     try {
       await this.client.describeSearchIndex({ tableName, indexName });
@@ -163,7 +199,13 @@ export default class Ots {
     logger.debug(`create index ${indexName} success`);
   }
 
-  private async handlerTable(tableName: string, params: any): Promise<Boolean> {
+  /**
+   * 创建表
+   * @param tableName c
+   * @param params
+   * @returns
+   */
+  private async createTable(tableName: string, params: any): Promise<Boolean> {
     logger.debug(`check table ${tableName}`);
     try {
       await this.client.describeTable({ tableName });

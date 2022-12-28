@@ -61,7 +61,7 @@ const getInputCommandOptions = (inputs: IInput) => {
   };
 };
 
-const updateOneService = async (configPath, serviceName: string) => {
+const updateOneService = async (inputs, serviceName: string) => {
   const rootPath = path.join(getRootHome(), "cache", "serevrless-cd");
   /**
    * 先删除再下载并解压
@@ -80,7 +80,7 @@ const updateOneService = async (configPath, serviceName: string) => {
     strip: 1,
   });
 
-  const srcPath = await getSrcPath(configPath);
+  const srcPath = await getSrcPath(inputs);
   if (serviceName) {
     const servicePath = path.join(srcPath, serviceName);
     await promisify(rimraf)(servicePath);
@@ -89,10 +89,9 @@ const updateOneService = async (configPath, serviceName: string) => {
   }
 };
 
-const updateService = async (inputs: IInput) => {
+const update = async (inputs: IInput) => {
   const inputOptions = getInputCommandOptions(inputs);
   logger.debug(`input options: ${JSON.stringify(inputOptions)}`);
-  const configPath = _.get(inputs, "path.configPath");
   const serviceMap = {
     master: ["master"],
     worker: ["worker", "worker-deliver", "workerDeliver"],
@@ -127,13 +126,11 @@ const updateService = async (inputs: IInput) => {
     );
   }
   for (const serviceName of services) {
-    await updateOneService(configPath, serviceName);
+    await updateOneService(inputs, serviceName);
   }
 };
 
 export default {
-  getInputCommandOptions,
   hasCommandHelp,
-  updateOneService,
-  updateService,
+  update,
 };
